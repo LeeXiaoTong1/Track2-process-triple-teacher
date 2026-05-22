@@ -101,3 +101,31 @@ python main_train.py \
   --interval 3 \
   --save_best_by f1 \
   --out_fold ./ckpt_t2/ufm_stage3_final_mert_obeats_ft
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+评估：
+  
+python generate_score_multicrop.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_stage3_final_mert_obeats_ft \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --num_crops 3 \
+  --batch_files 16 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_stage3_final_mert_obeats_ft/result/dev_multicrop3_meanlogit.csv
