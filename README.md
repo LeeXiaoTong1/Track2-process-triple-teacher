@@ -764,7 +764,7 @@ python generate_score_multicrop_plus.py \
 
 # 16. 两分支 / 三分支 fusion 历史方案
 
-这是你之前从 88.20 到 90.17 的关键路径。
+这是我之前从 88.20 到 90.17 的一个步骤。
 
 ## 16.1 二分支 fusion
 
