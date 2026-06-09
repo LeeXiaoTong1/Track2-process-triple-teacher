@@ -45,7 +45,6 @@ def initParams():
     add_arg_if_absent('--crop_consistency_weight', type=float, default=0.0)
 
     add_arg_if_absent('--t2_gdro_weak3', action='store_true', help='Apply GDRO only to speech/sound/music, excluding singing.')
-    add_arg_if_absent('--t2_gdro_active_types', type=str, default='', help="Comma-separated type ids for GDRO, e.g. '1,3' for sound+music. Overrides t2_gdro_weak3.")
     add_arg_if_absent('--t2_target_floor', type=float, default=0.95, help='Target per-type F1 floor used by all95_f1 checkpoint selection.')
     add_arg_if_absent('--t2_floor_penalty', type=float, default=2.0, help='Penalty strength for types below t2_target_floor.')
     add_arg_if_absent('--t2_singing_floor', type=float, default=0.94, help='Singing F1 floor used by safe_f1 checkpoint selection.')
@@ -57,7 +56,6 @@ def initParams():
     add_arg_if_absent('--t2_sing_anchor_temp', type=float, default=2.0, help='Temperature for singing teacher KL.')
     add_arg_if_absent('--t2_sing_anchor_margin_weight', type=float, default=0.2, help='Margin alignment weight in singing teacher loss.')
     add_arg_if_absent('--t2_sing_anchor_correct_only', action='store_true', help='Only distill teacher on singing samples that teacher predicts correctly.')
-    add_arg_if_absent('--t2_teacher_anchor_types', type=str, default='2', help="Comma-separated type ids anchored to teacher. Recommended '0,2' for speech+singing.")
 
     # Training hyperparameters
     parser.add_argument('--num_epochs', type=int, default=20, help="Number of epochs for training")
@@ -82,8 +80,8 @@ def initParams():
         '--save_best_by',
         type=str,
         default='loss',
-        choices=['loss', 'eer', 'f1', 'safe_f1', 'weak3_f1', 'soundmusic_f1', 'vocal_protect_f1', 'min4_f1', 'all95_f1'],
-        help='Metric used to save the best model: loss, eer, f1, safe_f1, weak3_f1, soundmusic_f1, vocal_protect_f1, min4_f1, or all95_f1'
+        choices=['loss', 'eer', 'f1', 'safe_f1', 'weak3_f1', 'min4_f1', 'all95_f1'],
+        help='Metric used to save the best model: loss, eer, f1, safe_f1, weak3_f1, min4_f1, or all95_f1'
     )
     
     # generalized strategy
@@ -232,31 +230,6 @@ def router_entropy_loss(expert_weights):
     return entropy
 
 
-
-def parse_type_id_list(text, default=None):
-    """
-    Parse comma-separated Track2 type ids.
-      0=speech, 1=sound, 2=singing, 3=music
-    """
-    if text is None or str(text).strip() == "":
-        return default
-    out = []
-    for item in str(text).split(','):
-        item = item.strip()
-        if item == "":
-            continue
-        out.append(int(item))
-    return out if len(out) > 0 else default
-
-
-def get_gdro_active_types(args):
-    active = parse_type_id_list(getattr(args, "t2_gdro_active_types", ""), default=None)
-    if active is not None:
-        return active
-    if getattr(args, "t2_gdro_weak3", False):
-        return [0, 1, 3]
-    return None
-
 def build_track2_teacher(args):
     """
     Build a frozen baseline teacher for Singing protection.
@@ -296,31 +269,23 @@ def build_track2_teacher(args):
     return teacher
 
 
-def teacher_anchor_loss(
+def singing_teacher_anchor_loss(
     student_logits,
     teacher_logits,
     labels,
     type_ids,
-    anchor_types=(2,),
     temp=2.0,
     margin_weight=0.2,
     correct_only=False
 ):
     """
-    Distill selected audio types from a frozen teacher.
-    Type ids: 0=speech, 1=sound, 2=singing, 3=music.
-    Label convention: 0=real, 1=fake.
+    Distill only Singing samples from the baseline teacher.
+    Label convention: 0 = real, 1 = fake.
     """
     if type_ids is None:
         return student_logits.new_tensor(0.0)
 
-    if anchor_types is None or len(anchor_types) == 0:
-        return student_logits.new_tensor(0.0)
-
-    mask = torch.zeros_like(type_ids, dtype=torch.bool)
-    for t in anchor_types:
-        mask = mask | (type_ids == int(t))
-
+    mask = (type_ids == 2)
     if correct_only:
         teacher_pred = torch.argmax(teacher_logits.detach(), dim=1)
         mask = mask & (teacher_pred == labels)
@@ -344,53 +309,26 @@ def teacher_anchor_loss(
     return kl + margin_weight * margin
 
 
-def singing_teacher_anchor_loss(
-    student_logits,
-    teacher_logits,
-    labels,
-    type_ids,
-    temp=2.0,
-    margin_weight=0.2,
-    correct_only=False
-):
-    """Backward-compatible Singing-only wrapper."""
-    return teacher_anchor_loss(
-        student_logits=student_logits,
-        teacher_logits=teacher_logits,
-        labels=labels,
-        type_ids=type_ids,
-        anchor_types=(2,),
-        temp=temp,
-        margin_weight=margin_weight,
-        correct_only=correct_only,
-    )
-
-
 def compute_floor_scores(type_f1s, avg_f1, floor=0.95, penalty=2.0, singing_floor=0.94, singing_penalty=1.5):
     """
     Returns:
       weak3_f1: mean(speech, sound, music)
-      soundmusic_f1: mean(sound, music)
-      vocal_protect_f1: mean(speech, singing) - deficit penalty under floor
       min4_f1: min over all four types
       all95_f1: avg_f1 penalized by deficits under target floor
       safe_f1: avg_f1 penalized by Singing deficit only
     """
     if type_f1s is None or len(type_f1s) < 4:
-        return avg_f1, avg_f1, avg_f1, avg_f1, avg_f1, avg_f1
+        return avg_f1, avg_f1, avg_f1, avg_f1
 
     f = [float(x) for x in type_f1s]
     weak3_f1 = float(np.mean([f[0], f[1], f[3]]))
-    soundmusic_f1 = float(np.mean([f[1], f[3]]))
-    vocal_mean = float(np.mean([f[0], f[2]]))
-    vocal_deficit = float(np.mean([max(0.0, float(floor) - f[0]), max(0.0, float(floor) - f[2])]))
-    vocal_protect_f1 = vocal_mean - float(penalty) * vocal_deficit
     min4_f1 = float(np.min(f))
     deficits = [max(0.0, float(floor) - x) for x in f]
     all95_f1 = float(avg_f1) - float(penalty) * float(np.mean(deficits))
     sing_gap = max(0.0, float(singing_floor) - f[2])
     safe_f1 = float(avg_f1) - float(singing_penalty) * sing_gap
-    return weak3_f1, soundmusic_f1, vocal_protect_f1, min4_f1, all95_f1, safe_f1
+    return weak3_f1, min4_f1, all95_f1, safe_f1
+
 
 
 
@@ -748,8 +686,6 @@ def train(args):
     prev_eer = float("inf")
     prev_f1 = -float("inf")
     prev_weak3_f1 = -float("inf")
-    prev_soundmusic_f1 = -float("inf")
-    prev_vocal_protect_f1 = -float("inf")
     prev_min4_f1 = -float("inf")
     prev_all95_f1 = -float("inf")
     prev_safe_f1 = -float("inf")
@@ -813,7 +749,7 @@ def train(args):
 
                 # Detection loss
                 if args.train_task == "atadd-track2" and args.t2_gdro and type_ids is not None:
-                    active_types = get_gdro_active_types(args)
+                    active_types = [0, 1, 3] if getattr(args, "t2_gdro_weak3", False) else None
                     feat_loss = type_group_dro_ce_loss(
                         outputs=feat_outputs,
                         labels=labels,
@@ -908,13 +844,11 @@ def train(args):
                         _, teacher_outputs = singing_teacher(feat if feat.dim() != 3 else feat[:, 0, :])
 
                     # If using multi-crop, anchor the mean student logits to teacher on first crop.
-                    anchor_types = parse_type_id_list(getattr(args, "t2_teacher_anchor_types", "2"), default=[2])
-                    loss_sing_anchor = teacher_anchor_loss(
+                    loss_sing_anchor = singing_teacher_anchor_loss(
                         student_logits=feat_outputs,
                         teacher_logits=teacher_outputs,
                         labels=labels,
                         type_ids=type_ids,
-                        anchor_types=anchor_types,
                         temp=getattr(args, "t2_sing_anchor_temp", 2.0),
                         margin_weight=getattr(args, "t2_sing_anchor_margin_weight", 0.2),
                         correct_only=getattr(args, "t2_sing_anchor_correct_only", False)
@@ -1056,7 +990,7 @@ def train(args):
             else:
                 val_f1 = f1_score(labels, preds, average='macro', zero_division=0)
 
-            val_weak3_f1, val_soundmusic_f1, val_vocal_protect_f1, val_min4_f1, val_all95_f1, t2_safe_f1 = compute_floor_scores(
+            val_weak3_f1, val_min4_f1, val_all95_f1, t2_safe_f1 = compute_floor_scores(
                 type_f1s=type_f1s,
                 avg_f1=val_f1,
                 floor=getattr(args, "t2_target_floor", 0.95),
@@ -1066,8 +1000,6 @@ def train(args):
             )
 
             print("Val Weak3F1 [speech/sound/music]: {}".format(val_weak3_f1))
-            print("Val SoundMusicF1 [sound/music]: {}".format(val_soundmusic_f1))
-            print("Val VocalProtectF1 [speech/singing guarded]: {}".format(val_vocal_protect_f1))
             print("Val Min4F1: {}".format(val_min4_f1))
             print("Val All95F1 score: {}".format(val_all95_f1))
             print("Val SafeF1: {}".format(t2_safe_f1))
@@ -1115,16 +1047,6 @@ def train(args):
         elif args.save_best_by == "weak3_f1":
             if val_weak3_f1 > prev_weak3_f1:
                 prev_weak3_f1 = val_weak3_f1
-                save_flag = True
-
-        elif args.save_best_by == "soundmusic_f1":
-            if val_soundmusic_f1 > prev_soundmusic_f1:
-                prev_soundmusic_f1 = val_soundmusic_f1
-                save_flag = True
-
-        elif args.save_best_by == "vocal_protect_f1":
-            if val_vocal_protect_f1 > prev_vocal_protect_f1:
-                prev_vocal_protect_f1 = val_vocal_protect_f1
                 save_flag = True
 
         elif args.save_best_by == "min4_f1":

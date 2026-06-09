@@ -5,20 +5,17 @@ generate_score_multicrop_plus.py
 
 Deterministic multi-crop scoring script for AT-ADD Track2.
 
-Outputs a rich CSV:
+Outputs:
   name, score, logit_real, logit_fake, margin,
   type_speech, type_sound, type_singing, type_music,
   crop_var,
   expert_xlsr, expert_mert, expert_beats, expert_artifact
 
-Notes:
-  - score is P(real).
-  - margin = logit_real - logit_fake.
-  - label decision convention used by previous scripts:
-      score >= threshold -> real
-      score <  threshold -> fake
-  - For UFMTrack2Full, type probabilities come from model.latest_type_logits.
-  - For models without type logits, type probabilities are set to uniform 0.25.
+score = P(real)
+margin = logit_real - logit_fake
+decision convention:
+  score >= threshold -> real
+  score <  threshold -> fake
 """
 
 import argparse
@@ -35,18 +32,13 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from model import *  # noqa: F401,F403
-
-
-TYPE_ORDER = ["speech", "sound", "singing", "music"]
-EXPERT_ORDER = ["xlsr", "mert", "beats", "artifact"]
+from model import *  # noqa
 
 
 def parse_args():
     p = argparse.ArgumentParser()
 
-    p.add_argument("--model_path", type=str, required=True,
-                   help="Folder containing args.json and atadd_model.pt")
+    p.add_argument("--model_path", type=str, required=True)
     p.add_argument("--gpu", type=str, default="0")
     p.add_argument("--eval_task", type=str, default="atadd-track2")
     p.add_argument("--eval_audio", type=str, required=True)
@@ -54,14 +46,12 @@ def parse_args():
 
     p.add_argument("--num_crops", type=int, default=5)
     p.add_argument("--audio_len", type=int, default=None)
-    p.add_argument("--batch_files", type=int, default=8,
-                   help="Number of audio files per dataloader batch. Actual forward batch = batch_files * num_crops")
+    p.add_argument("--batch_files", type=int, default=8)
     p.add_argument("--num_workers", type=int, default=8)
     p.add_argument("--max_files", type=int, default=-1)
     p.add_argument("--agg", type=str, default="mean_logit",
                    choices=["mean_logit", "mean_score", "min_real"])
 
-    # Optional path overrides. Usually not needed because args.json is loaded.
     p.add_argument("--xlsr", type=str, default="")
     p.add_argument("--wavlm", type=str, default="")
     p.add_argument("--mert", type=str, default="")
@@ -75,13 +65,13 @@ def parse_args():
 def load_saved_args(cli):
     model_path = Path(cli.model_path)
     json_path = model_path / "args.json"
+
     if not json_path.exists():
-        raise FileNotFoundError(f"Cannot find args.json in model_path: {json_path}")
+        raise FileNotFoundError(f"Cannot find args.json: {json_path}")
 
     with open(json_path, "r", encoding="utf-8") as f:
         saved = json.load(f)
 
-    # Merge saved args and CLI args. CLI overrides only if explicitly supplied / relevant.
     args = SimpleNamespace(**saved)
 
     args.model_path = cli.model_path
@@ -100,15 +90,14 @@ def load_saved_args(cli):
     else:
         args.audio_len = int(getattr(args, "audio_len", 64600))
 
-    # Optional overrides.
     for k in ["xlsr", "wavlm", "mert", "beats", "obeats", "model"]:
         v = getattr(cli, k)
         if v:
             setattr(args, k, v)
 
-    # Defaults for older args.json files.
     if not hasattr(args, "model"):
-        raise ValueError("args.json has no `model`; pass --model explicitly.")
+        raise ValueError("args.json has no model field. Pass --model explicitly.")
+
     if not hasattr(args, "xlsr"):
         args.xlsr = "huggingface/wav2vec2-xls-r-300m"
     if not hasattr(args, "wavlm"):
@@ -130,21 +119,25 @@ def build_model(args):
 
     if m == "aasist":
         model = Rawaasist()
+
     elif m == "specresnet":
         model = ResNet18ForAudio()
 
     elif m == "fr-w2v2aasist":
         model = XLSRAASIST(model_dir=args.xlsr)
+
     elif m == "ft-w2v2aasist":
         model = XLSRAASIST(model_dir=args.xlsr, freeze=False)
 
     elif m == "fr-wavlmaasist":
         model = WAVLMAASIST(model_dir=args.wavlm)
+
     elif m == "ft-wavlmaasist":
         model = WAVLMAASIST(model_dir=args.wavlm, freeze=False)
 
     elif m == "fr-mertaasist":
         model = MERTAASIST(model_dir=args.mert)
+
     elif m == "ft-mertaasist":
         model = MERTAASIST(model_dir=args.mert, freeze=False)
 
@@ -155,6 +148,7 @@ def build_model(args):
             num_prompt_tokens=getattr(args, "num_prompt_tokens", 10),
             dropout=getattr(args, "pt_dropout", 0.1),
         )
+
     elif m == "wpt-w2v2aasist":
         model = WPTW2V2AASIST(
             model_dir=args.xlsr,
@@ -163,6 +157,7 @@ def build_model(args):
             num_wavelet_tokens=getattr(args, "num_wavelet_tokens", 4),
             dropout=getattr(args, "pt_dropout", 0.1),
         )
+
     elif m == "pt-wavlmaasist":
         model = PTWAVLMAASIST(
             model_dir=args.wavlm,
@@ -170,6 +165,7 @@ def build_model(args):
             num_prompt_tokens=getattr(args, "num_prompt_tokens", 10),
             dropout=getattr(args, "pt_dropout", 0.1),
         )
+
     elif m == "wpt-wavlmaasist":
         model = WPTWAVLMAASIST(
             model_dir=args.wavlm,
@@ -178,6 +174,7 @@ def build_model(args):
             num_wavelet_tokens=getattr(args, "num_wavelet_tokens", 4),
             dropout=getattr(args, "pt_dropout", 0.1),
         )
+
     elif m == "pt-mertaasist":
         model = PTMERTAASIST(
             model_dir=args.mert,
@@ -185,6 +182,7 @@ def build_model(args):
             num_prompt_tokens=getattr(args, "num_prompt_tokens", 10),
             dropout=getattr(args, "pt_dropout", 0.1),
         )
+
     elif m == "wpt-mertaasist":
         model = WPTMERTAASIST(
             model_dir=args.mert,
@@ -218,24 +216,27 @@ def build_model(args):
             layers=getattr(args, "ufm_layers", 0),
             dropout=getattr(args, "ufm_dropout", 0.0),
         )
+
     else:
-        raise ValueError(f"Unsupported model type for this script: {m}")
+        raise ValueError(f"Unsupported model type: {m}")
 
     return model.to(args.device)
 
 
 def load_checkpoint(model, model_path, device):
     ckpt_path = Path(model_path) / "atadd_model.pt"
+
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Cannot find checkpoint: {ckpt_path}")
 
     ckpt = torch.load(str(ckpt_path), map_location=device)
+
     if isinstance(ckpt, dict) and "state_dict" in ckpt:
         ckpt = ckpt["state_dict"]
+
     if isinstance(ckpt, dict) and "model" in ckpt:
         ckpt = ckpt["model"]
 
-    # Strip DataParallel prefix if any.
     if isinstance(ckpt, dict):
         new_ckpt = {}
         for k, v in ckpt.items():
@@ -245,10 +246,12 @@ def load_checkpoint(model, model_path, device):
         ckpt = new_ckpt
 
     missing, unexpected = model.load_state_dict(ckpt, strict=False)
+
     print("Loaded checkpoint:", ckpt_path)
     print("Missing keys:", len(missing))
     if len(missing) > 0:
         print("  first missing:", missing[:20])
+
     print("Unexpected keys:", len(unexpected))
     if len(unexpected) > 0:
         print("  first unexpected:", unexpected[:20])
@@ -276,16 +279,20 @@ def make_crops(wav, cut, num_crops):
         rep = int(np.ceil(cut / max(L, 1))) + 1
         wav = np.tile(wav, rep)[:cut]
         crops = [wav.copy() for _ in range(num_crops)]
+
     elif L == cut:
         crops = [wav.copy() for _ in range(num_crops)]
+
     else:
         if num_crops == 1:
             starts = [0]
         else:
             starts = np.linspace(0, L - cut, num_crops).astype(np.int64).tolist()
+
         crops = [wav[s:s + cut].copy() for s in starts]
 
     crops = [normalize_clip(c) for c in crops]
+
     return torch.from_numpy(np.stack(crops, axis=0)).float().contiguous()
 
 
@@ -315,27 +322,32 @@ class MultiCropAudioDataset(Dataset):
     def __getitem__(self, idx):
         fn = self.files[idx]
         path = self.audio_dir / fn
+
         wav, _ = librosa.load(str(path), sr=16000, mono=True)
-        crops = make_crops(wav, cut=self.audio_len, num_crops=self.num_crops)
+        crops = make_crops(
+            wav,
+            cut=self.audio_len,
+            num_crops=self.num_crops
+        )
+
         return crops, fn
 
 
 def aggregate_logits(logits_all, agg):
     """
     logits_all: [B, C, 2]
-    Return:
-      score_np: P(real), [B]
-      avg_logits_np: [B, 2]
-      crop_var_np: variance of crop real scores, [B]
     """
     avg_logits = logits_all.mean(dim=1)
 
     if agg == "mean_logit":
         score = F.softmax(avg_logits, dim=-1)[:, 0]
+
     elif agg == "mean_score":
         score = F.softmax(logits_all, dim=-1)[:, :, 0].mean(dim=1)
+
     elif agg == "min_real":
         score = F.softmax(logits_all, dim=-1)[:, :, 0].min(dim=1).values
+
     else:
         raise ValueError(f"Unknown agg: {agg}")
 
@@ -381,8 +393,12 @@ def main():
         num_workers=args.num_workers,
         pin_memory=args.cuda,
     )
+
     if args.num_workers > 0:
-        loader_kwargs.update(dict(persistent_workers=True, prefetch_factor=2))
+        loader_kwargs.update(dict(
+            persistent_workers=True,
+            prefetch_factor=2
+        ))
 
     dl = DataLoader(ds, **loader_kwargs)
 
@@ -390,10 +406,20 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     header = [
-        "name", "score", "logit_real", "logit_fake", "margin",
-        "type_speech", "type_sound", "type_singing", "type_music",
+        "name",
+        "score",
+        "logit_real",
+        "logit_fake",
+        "margin",
+        "type_speech",
+        "type_sound",
+        "type_singing",
+        "type_music",
         "crop_var",
-        "expert_xlsr", "expert_mert", "expert_beats", "expert_artifact",
+        "expert_xlsr",
+        "expert_mert",
+        "expert_beats",
+        "expert_artifact",
     ]
 
     with open(out_path, "w", encoding="utf-8", newline="") as f:
@@ -402,7 +428,6 @@ def main():
 
         with torch.inference_mode():
             for crops, names in tqdm(dl, total=len(dl)):
-                # crops: [B, C, L]
                 B, C, L = crops.shape
                 flat = crops.view(B * C, L).to(args.device, non_blocking=True)
 
@@ -411,10 +436,10 @@ def main():
 
                 scores, avg_logits, crop_var = aggregate_logits(logits_all, args.agg)
 
-                # Type probabilities.
                 if hasattr(model, "latest_type_logits") and model.latest_type_logits is not None:
                     type_logits = model.latest_type_logits.view(B, C, -1).mean(dim=1)
                     type_prob = F.softmax(type_logits, dim=-1).detach().cpu().numpy()
+
                     if type_prob.shape[1] < 4:
                         pad = np.ones((B, 4 - type_prob.shape[1]), dtype=np.float32) / 4.0
                         type_prob = np.concatenate([type_prob, pad], axis=1)[:, :4]
@@ -423,11 +448,11 @@ def main():
                 else:
                     type_prob = np.ones((B, 4), dtype=np.float32) / 4.0
 
-                # Expert weights, if available.
                 if hasattr(model, "latest_expert_weights") and model.latest_expert_weights is not None:
                     ew = model.latest_expert_weights.view(B, C, -1).mean(dim=1)
                     ew = ew / ew.sum(dim=-1, keepdim=True).clamp_min(1e-8)
                     ew_np = ew.detach().cpu().numpy()
+
                     if ew_np.shape[1] < 4:
                         pad = np.zeros((B, 4 - ew_np.shape[1]), dtype=np.float32)
                         ew_np = np.concatenate([ew_np, pad], axis=1)[:, :4]
@@ -440,7 +465,8 @@ def main():
                     lr = float(avg_logits[i, 0])
                     lf = float(avg_logits[i, 1])
                     margin = lr - lf
-                    row = [
+
+                    writer.writerow([
                         name,
                         float(scores[i]),
                         lr,
@@ -455,8 +481,7 @@ def main():
                         float(ew_np[i, 1]),
                         float(ew_np[i, 2]),
                         float(ew_np[i, 3]),
-                    ]
-                    writer.writerow(row)
+                    ])
 
     print("Saved:", out_path)
 

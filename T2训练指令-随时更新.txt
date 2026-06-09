@@ -1,0 +1,202 @@
+Step 1：
+python make_track2_type_labels.py \
+  --train_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label/train.csv \
+  --dev_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label/dev.csv \
+  --out_dir /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type
+
+
+
+Step 2：
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ft-w2v2aasist \
+  --xlsr /root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/wav2vec2-xls-r-300m \
+  --atadd_t2_train_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/train \
+  --atadd_t2_train_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type/train_speech.csv \
+  --atadd_t2_dev_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --atadd_t2_dev_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type/dev_speech.csv \
+  --seed 2027 \
+  --batch_size 16 \
+  --lr 0.000003 \
+  --num_epochs 7 \
+  --interval 5 \
+  --save_best_by f1 \
+  --out_fold ./ckpt_t2/speech_ftxlsr_specialist
+  
+  
+  
+Step 3：
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --init_from ./ckpt_t2/ufm_vocal_anchor_soundmusic/atadd_model.pt \
+  --xlsr /root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/wav2vec2-xls-r-300m \
+  --mert /root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/MERT-v1-330M \
+  --beats /root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/OpenBEATs-ICME \
+  --atadd_t2_train_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/train \
+  --atadd_t2_train_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type/train_sound.csv \
+  --atadd_t2_dev_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --atadd_t2_dev_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type/dev_sound.csv \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.0 \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 1 \
+  --crop_consistency_weight 0.0 \
+  --seed 2028 \
+  --batch_size 32 \
+  --lr 0.0000002 \
+  --num_epochs 5 \
+  --interval 4 \
+  --save_best_by f1 \
+  --out_fold ./ckpt_t2/sound_ufm_specialist 
+ 
+  
+Step 4：  
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ft-mertaasist \
+  --mert /root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/MERT-v1-330M \
+  --atadd_t2_train_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/train \
+  --atadd_t2_train_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type/train_music.csv \
+  --atadd_t2_dev_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --atadd_t2_dev_label /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label_by_type/dev_music.csv \
+  --seed 2029 \
+  --batch_size 12 \
+  --lr 0.000003 \
+  --num_epochs 6 \
+  --interval 6 \
+  --save_best_by f1 \
+  --out_fold ./ckpt_t2/music_mert_specialist
+  
+  
+  
+Step 5：   
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/speech_ftxlsr_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/speech_ftxlsr_specialist/result/dev_speech_plus.csv
+
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/speech_ftxlsr_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/speech_ftxlsr_specialist/result/progress_speech_plus.csv
+  
+  
+  
+Step 6：   
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/sound_ufm_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/sound_ufm_specialist/result/dev_sound_plus.csv
+
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/sound_ufm_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/sound_ufm_specialist/result/progress_sound_plus.csv
+  
+  
+  
+  
+Step 7：   
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/music_mert_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/music_mert_specialist/result/dev_music_mert_plus.csv
+
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/music_mert_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/music_mert_specialist/result/progress_music_mert_plus.csv
+  
+  
+  
+  
+Step 8： 
+python tune_multi_branch_fusion_holdout.py \
+  --branch baseline:./ckpt_t2/ft_xlsr_baseline/result/dev_baseline_plus.csv \
+  --branch speech:./ckpt_t2/speech_ftxlsr_specialist/result/dev_speech_plus.csv \
+  --branch sound:./ckpt_t2/sound_ufm_specialist/result/dev_sound_plus.csv \
+  --branch music:./ckpt_t2/music_mert_specialist/result/dev_music_mert_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/dev_type_probs.csv \
+  --label_csv /root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2/label/dev.csv \
+  --out_json ./ckpt_t2/multibranch_fusion_typespecialists.json \
+  --trials 8000 \
+  --holdout_frac 0.35 \
+  --mode speech_music_boost \
+  --seed 1234
+  
+  
+  
+  
+Step 9： 
+python apply_multi_branch_fusion.py \
+  --branch baseline:./ckpt_t2/ft_xlsr_baseline/result/progress_baseline_plus.csv \
+  --branch speech:./ckpt_t2/speech_ftxlsr_specialist/result/progress_speech_plus.csv \
+  --branch sound:./ckpt_t2/sound_ufm_specialist/result/progress_sound_plus.csv \
+  --branch music:./ckpt_t2/music_mert_specialist/result/progress_music_mert_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/progress_type_probs.csv \
+  --calib_json ./ckpt_t2/multibranch_fusion_typespecialists.json \
+  --out_csv ./ckpt_t2/predict_multibranch_typespecialists.csv \
+  --debug_csv ./ckpt_t2/debug_multibranch_typespecialists.csv
+  
+  
+  
+打包：
+cd ./ckpt_t2
+cp predict_multibranch_typespecialists.csv predict.csv
+zip submit_multibranch_typespecialists.zip predict.csv
