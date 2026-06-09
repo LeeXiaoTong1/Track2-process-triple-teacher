@@ -1,202 +1,1053 @@
-<h1 align="center">AT-ADD Challenge Baseline</h1>
+下面给你整理一版**完整 Track2 改进流程**。这不是把所有失败实验都重复一遍，而是把我们多轮讨论后沉淀下来的**最终可复现主线**写清楚：从代码准备、baseline/teacher、UFM、type classifier、specialist、fusion 到提交。
 
-<p align="center">
-  <a href="https://www.at-add.com"><img src="https://img.shields.io/badge/🏠%20Home%20Page-AT--ADD-ff7f0e?style=for-the-badge"></a>
-  <img src="https://img.shields.io/badge/-%20-white?style=flat-square" width="10" height="28">
-  <a href="https://arxiv.org/abs/2604.08184"><img src="https://img.shields.io/badge/📄%20Evaluation%20Plan-arXiv-b31b1b?style=for-the-badge"></a>
-</p>
-
-<p align="center">
-  <a href="https://huggingface.co/datasets/xieyuankun/AT-ADD-Track1"><img src="https://img.shields.io/badge/📊%20Track1%20Data%20%26%20Registration-HuggingFace-FFD21E?style=for-the-badge"></a>
-  <img src="https://img.shields.io/badge/-%20-white?style=flat-square" width="10" height="28">
-  <a href="https://huggingface.co/datasets/xieyuankun/AT-ADD-Track2"><img src="https://img.shields.io/badge/📊%20Track2%20Data%20%26%20Registration-HuggingFace-FFD21E?style=for-the-badge"></a>
-</p>
-
-<p align="center">
-  <a href="https://www.codabench.org/competitions/15477"><img src="https://img.shields.io/badge/🏆%20Track1%20Competition-Codabench-4CAF50?style=for-the-badge"></a>
-  <img src="https://img.shields.io/badge/-%20-white?style=flat-square" width="10" height="28">
-  <a href="https://www.codabench.org/competitions/15481"><img src="https://img.shields.io/badge/🏆%20Track2%20Competition-Codabench-4CAF50?style=for-the-badge"></a>
-</p>
-
-<p align="center">
-  <img src="figure/intro.png" style="width: 100%; height: auto;">
-</p>
-
-This repository provides the official baseline implementations of conventional and self-supervised learning (SSL)-based countermeasures for the **AT-ADD: All-Type Audio Deepfake Detection Challenge**.  
-
-For the ALLM-based baseline, please refer to:  
-https://github.com/yangchunmian123/AT-ADD-ALLM-Baseline
+你可以按这个流程重新在本地完整跑一遍。已经有的 checkpoint 可以跳过对应训练步骤。
 
 ---
 
-## 1. Data Preparation
+# 0. 固定路径约定
 
-### Dataset Structure
-
-Please download the AT-ADD dataset and organize it as follows:
-
-```
-atadd/
-├── T1/
-│   ├── train/
-│   │   └── *.wav
-│   ├── dev/
-│   │   └── *.wav
-│   ├── eval/
-│   │   └── *.wav
-│   └── label/
-│       ├── train.csv
-│       ├── dev.csv
-├── T2/
-│   ├── train/
-│   │   └── *.wav
-│   ├── dev/
-│   │   └── *.wav
-│   ├── eval/
-│   │   └── *.wav
-│   └── label/
-│       ├── train.csv
-│       ├── dev.csv
-```
-
----
-
-### Configuration
-
-Modify the dataset paths in `config.py` or pass them via command-line arguments:
-
-```
---atadd_t1_train_audio
---atadd_t1_train_label
---atadd_t1_dev_audio
---atadd_t1_dev_label
---atadd_t1_eval_audio
-
---atadd_t2_train_audio
---atadd_t2_train_label
---atadd_t2_dev_audio
---atadd_t2_dev_label
---atadd_t2_eval_audio
-```
-
----
-
-## 2. Environment Setup
+下面所有命令默认在项目根目录执行：
 
 ```bash
-conda create -n atadd python=3.10.13
-conda activate atadd
-pip install -r requirements.txt
+cd /root/autodl-tmp/AT-ADD-Baseline-track2-R2
+```
+
+统一环境变量：
+
+```bash
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+```
+
+统一路径：
+
+```bash
+ROOT=/root/autodl-tmp/AT-ADD-Baseline-track2-R2
+DATA=/root/autodl-tmp/AT-ADD-Baseline-track2-R2/AT_ADD_data/Track2
+
+XLSR=/root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/wav2vec2-xls-r-300m
+MERT=/root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/MERT-v1-330M
+BEATS=/root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/OpenBEATs-ICME
+
+TEACHER_CKPT=/root/autodl-tmp/AT-ADD-Baseline-track2/ckpt_t2/gdro_adv_xlsr_aasist/checkpoint/atadd_model_10.pt
+TEACHER_DIR=/root/autodl-tmp/AT-ADD-Baseline-track2/ckpt_t2/gdro_adv_xlsr_aasist
 ```
 
 ---
 
-## 3. SSL Model Preparation
+# 1. 安装我们最终版代码修改
 
-Download the pre-trained SSL model from Hugging Face:
+你需要把这些脚本放到项目根目录。此前我已经为你生成过：
+
+* `install_nextstep_branch_fusion.py`
+* `make_track2_type_labels.py`
+* `generate_score_multicrop_plus.py`
+* `train_type_classifier_track2.py`
+* `score_type_classifier_track2.py`
+* `tune_multi_branch_fusion_holdout.py`
+* `apply_multi_branch_fusion.py`
+* `tune_three_branch_fusion_holdout.py`
+* `apply_three_branch_fusion.py`
+* `apply_fixed_threshold.py`
+* `diagnose_type_thresholds.py`
+
+核心安装脚本：
+
+[install_nextstep_branch_fusion.py](sandbox:/mnt/data/install_nextstep_branch_fusion.py)
+
+最终 type-filter label 脚本：
+
+[make_track2_type_labels.py](sandbox:/mnt/data/make_track2_type_labels.py)
+
+最终 multi-branch fusion 脚本：
+
+[tune_multi_branch_fusion_holdout.py](sandbox:/mnt/data/tune_multi_branch_fusion_holdout.py)
+
+[apply_multi_branch_fusion.py](sandbox:/mnt/data/apply_multi_branch_fusion.py)
+
+如果你本地还没有这些文件，下载后上传到项目根目录，然后运行：
 
 ```bash
-huggingface-cli download facebook/wav2vec2-xls-r-300m \
-  --local-dir yourpath/huggingface/wav2vec2-xls-r-300m/
+python install_nextstep_branch_fusion.py
 ```
 
-Then update the path in `config.py`:
+检查代码语法：
 
+```bash
+python -m py_compile \
+  main_train.py \
+  model.py \
+  generate_score_multicrop_plus.py \
+  train_type_classifier_track2.py \
+  score_type_classifier_track2.py \
+  tune_branch_fusion.py \
+  apply_branch_fusion.py \
+  tune_three_branch_fusion_holdout.py \
+  apply_three_branch_fusion.py \
+  tune_multi_branch_fusion_holdout.py \
+  apply_multi_branch_fusion.py \
+  make_track2_type_labels.py
 ```
---xlsr yourpath/huggingface/wav2vec2-xls-r-300m
+
+检查 `main_train.py` 是否已经有最终参数：
+
+```bash
+python main_train.py --help | grep -E "all95_f1|soundmusic_f1|vocal_protect_f1|t2_teacher_anchor_types|t2_gdro_active_types|train_crop_mode"
+```
+
+正常应该能看到这些参数。
+
+---
+
+# 2. 整理 baseline / teacher checkpoint
+
+你决定继续使用：
+
+```bash
+/root/autodl-tmp/AT-ADD-Baseline-track2/ckpt_t2/gdro_adv_xlsr_aasist/checkpoint/atadd_model_10.pt
+```
+
+我们把它整理成标准评分目录：
+
+```bash
+mkdir -p ./ckpt_t2/ft_xlsr_baseline
+
+cp $TEACHER_DIR/args.json \
+   ./ckpt_t2/ft_xlsr_baseline/args.json
+
+cp $TEACHER_CKPT \
+   ./ckpt_t2/ft_xlsr_baseline/atadd_model.pt
+```
+
+这个 baseline 的用途：
+
+```text
+主要保护 Singing；
+不要用它强行 anchor Speech，因为它 Speech 不够强。
 ```
 
 ---
 
-## 4. Training
+# 3. 生成 type-filtered label
 
-### Baseline Models
-
-⚠️ The hyperparameters in the provided scripts (e.g., learning rate, batch size, random seed) follow the settings reported in the original papers. Modifying them—especially for fine-tuning—may lead to noticeable performance differences.
+这是后续 Speech/Sound/Music specialist 的基础。
 
 ```bash
-cd AT-ADD-Baseline
-bash train.sh
+python make_track2_type_labels.py \
+  --train_label $DATA/label/train.csv \
+  --dev_label $DATA/label/dev.csv \
+  --out_dir $DATA/label_by_type
+```
+
+生成后检查：
+
+```bash
+ls $DATA/label_by_type
+```
+
+应该看到：
+
+```text
+train_speech.csv
+train_sound.csv
+train_singing.csv
+train_music.csv
+dev_speech.csv
+dev_sound.csv
+dev_singing.csv
+dev_music.csv
 ```
 
 ---
 
-## 5. Evaluation
+# 4. 训练独立 type classifier
 
-```bash
-bash test.sh
+这个模型只负责判断音频类型：
+
+```text
+speech / sound / singing / music
 ```
 
-This will generate `logits.csv` in the corresponding checkpoint directory.
-
-### Generate Predictions
+它替代 UFM 内部那个不可靠的 type posterior。
 
 ```bash
-python generate_predict.py
+python train_type_classifier_track2.py \
+  --gpu 0 \
+  --train_audio $DATA/train \
+  --train_label $DATA/label/train.csv \
+  --dev_audio $DATA/dev \
+  --dev_label $DATA/label/dev.csv \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --out_dir ./ckpt_t2/type_classifier_xmb \
+  --batch_size 32 \
+  --epochs 5 \
+  --lr 0.0001 \
+  --seed 1234
 ```
 
-The script applies a default threshold of **0.5** to produce `predict.csv`, which can be directly used for submission.
+生成 Dev type probabilities：
+
+```bash
+python score_type_classifier_track2.py \
+  --gpu 0 \
+  --model_dir ./ckpt_t2/type_classifier_xmb \
+  --eval_audio $DATA/dev \
+  --out_csv ./ckpt_t2/type_classifier_xmb/dev_type_probs.csv \
+  --batch_size 32 \
+  --num_workers 8
+```
+
+生成 Progress type probabilities：
+
+```bash
+python score_type_classifier_track2.py \
+  --gpu 0 \
+  --model_dir ./ckpt_t2/type_classifier_xmb \
+  --eval_audio $DATA/eval_progress \
+  --out_csv ./ckpt_t2/type_classifier_xmb/progress_type_probs.csv \
+  --batch_size 32 \
+  --num_workers 8
+```
 
 ---
 
-## 6. Additional Baselines
+# 5. 训练基础 UFM：all95 stage1
 
-This implementation is adapted from:
+这一阶段训练一个通用 UFM。
+注意：teacher 只 anchor Singing，即：
 
-https://github.com/xieyuankun/All-Type-ADD
-
-Several additional models are also supported (see `config.py`):
-
-```python
-choices = [
-    'specresnet', 'aasist',
-    'fr-w2v2aasist', 'fr-wavlmaasist', 'fr-mertaasist',
-    'ft-w2v2aasist', 'ft-wavlmaasist', 'ft-mertaasist',
-    'pt-w2v2aasist', 'wpt-w2v2aasist',
-    'pt-wavlmaasist', 'wpt-wavlmaasist',
-    'pt-mertaasist', 'wpt-mertaasist'
-]
+```bash
+--t2_teacher_anchor_types 2
 ```
 
-Feel free to explore and extend these models.
+不要 anchor Speech。
 
-Additionally, this framework supports **data augmentation** methods such as MUSAN, RIR, and RawBoost. These augmentations can be enabled in the dataset initialization, and are disabled by default.
-
-## Acknowledgment
-
-We gratefully acknowledge the following works, which serve as important baselines and foundations for this repository:
-
-**AASIST**
-```bibtex
-@inproceedings{jung2022aasist,
-  title={Aasist: Audio anti-spoofing using integrated spectro-temporal graph attention networks},
-  author={Jung, Jee-weon and Heo, Hee-Soo and Tak, Hemlata and Shim, Hye-jin and Chung, Joon Son and Lee, Bong-Jin and Yu, Ha-Jin and Evans, Nicholas},
-  booktitle={Proceedings of the ICASSP},
-  pages={6367--6371},
-  year={2022}
-}
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.0 \
+  --t2_return_type \
+  --t2_gdro \
+  --t2_gdro_active_types 0,1,3 \
+  --t2_gdro_eta 0.15 \
+  --ufm_type_loss 0.003 \
+  --ufm_router_entropy 0.0 \
+  --t2_teacher_model ft-w2v2aasist \
+  --t2_sing_teacher_ckpt $TEACHER_CKPT \
+  --t2_teacher_anchor_types 2 \
+  --t2_sing_anchor_weight 0.5 \
+  --t2_sing_anchor_temp 2.0 \
+  --t2_sing_anchor_margin_weight 0.2 \
+  --t2_sing_anchor_correct_only \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 1 \
+  --crop_consistency_weight 0.0 \
+  --t2_target_floor 0.95 \
+  --t2_floor_penalty 2.0 \
+  --seed 1234 \
+  --batch_size 32 \
+  --lr 0.000001 \
+  --num_epochs 5 \
+  --interval 4 \
+  --save_best_by all95_f1 \
+  --out_fold ./ckpt_t2/ufm_all95_stage1_teacher_weak3
 ```
 
-**FT-XLSR-AASIST**
-```bibtex
-@inproceedings{tak2022automatic,
-  title={Automatic Speaker Verification Spoofing and Deepfake Detection Using Wav2vec 2.0 and Data Augmentation},
-  author={Tak, Hemlata and Todisco, Massimiliano and Wang, Xin and Jung, Jee-weon and Yamagishi, Junichi and Evans, Nicholas},
-  booktitle={The Speaker and Language Recognition Workshop (Odyssey 2022)},
-  year={2022},
-  organization={ISCA}
-}
+---
+
+# 6. 训练基础 UFM：all95 stage2
+
+从 stage1 继续低学习率细调。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --init_from ./ckpt_t2/ufm_all95_stage1_teacher_weak3/atadd_model.pt \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.0 \
+  --t2_return_type \
+  --t2_gdro \
+  --t2_gdro_active_types 0,1,3 \
+  --t2_gdro_eta 0.10 \
+  --ufm_type_loss 0.001 \
+  --ufm_router_entropy 0.0 \
+  --t2_teacher_model ft-w2v2aasist \
+  --t2_sing_teacher_ckpt $TEACHER_CKPT \
+  --t2_teacher_anchor_types 2 \
+  --t2_sing_anchor_weight 0.5 \
+  --t2_sing_anchor_temp 2.0 \
+  --t2_sing_anchor_margin_weight 0.2 \
+  --t2_sing_anchor_correct_only \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 1 \
+  --crop_consistency_weight 0.0 \
+  --t2_target_floor 0.95 \
+  --t2_floor_penalty 2.0 \
+  --seed 1234 \
+  --batch_size 32 \
+  --lr 0.0000002 \
+  --num_epochs 3 \
+  --interval 3 \
+  --save_best_by all95_f1 \
+  --out_fold ./ckpt_t2/ufm_all95_stage2_teacher_weak3
 ```
 
-**WPT-XLSR-AASIST**
-```bibtex
-@inproceedings{xie2026detect,
-  title={Detect all-type deepfake audio: Wavelet prompt tuning for enhanced auditory perception},
-  author={Xie, Yuankun and Fu, Ruibo and Wang, Xiaopeng and Wang, Zhiyong and Cao, Songjun and Ma, Long and Cheng, Haonan and Ye, Long},
-  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
-  volume={40},
-  number={42},
-  pages={35922--35930},
-  year={2026}
-}
+如果你已经有：
+
+```text
+./ckpt_t2/ufm_all95_stage2_teacher_weak3/atadd_model.pt
+```
+
+可以跳过第 5、6 步。
+
+---
+
+# 7. 训练 Sound/Music UFM branch
+
+这一阶段得到：
+
+```text
+./ckpt_t2/ufm_vocal_anchor_soundmusic
+```
+
+它是后续 Sound/Music 相关分支的基础。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --init_from ./ckpt_t2/ufm_all95_stage2_teacher_weak3/atadd_model.pt \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.0 \
+  --t2_return_type \
+  --t2_gdro \
+  --t2_gdro_active_types 1,3 \
+  --t2_gdro_eta 0.35 \
+  --ufm_type_loss 0.001 \
+  --ufm_router_entropy 0.0 \
+  --t2_teacher_model ft-w2v2aasist \
+  --t2_sing_teacher_ckpt $TEACHER_CKPT \
+  --t2_teacher_anchor_types 2 \
+  --t2_sing_anchor_weight 1.0 \
+  --t2_sing_anchor_temp 2.0 \
+  --t2_sing_anchor_margin_weight 0.2 \
+  --t2_sing_anchor_correct_only \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 1 \
+  --crop_consistency_weight 0.0 \
+  --t2_target_floor 0.95 \
+  --t2_floor_penalty 2.0 \
+  --seed 1234 \
+  --batch_size 32 \
+  --lr 0.0000002 \
+  --num_epochs 3 \
+  --interval 3 \
+  --save_best_by all95_f1 \
+  --out_fold ./ckpt_t2/ufm_vocal_anchor_soundmusic
+```
+
+---
+
+# 8. 训练 Music UFM specialist
+
+这个是第一代 Music specialist。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --init_from ./ckpt_t2/ufm_vocal_anchor_soundmusic/atadd_model.pt \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.0 \
+  --t2_return_type \
+  --t2_gdro \
+  --t2_gdro_active_types 3 \
+  --t2_gdro_eta 0.60 \
+  --ufm_type_loss 0.001 \
+  --ufm_router_entropy 0.0 \
+  --t2_teacher_model ft-w2v2aasist \
+  --t2_sing_teacher_ckpt $TEACHER_CKPT \
+  --t2_teacher_anchor_types 2 \
+  --t2_sing_anchor_weight 1.0 \
+  --t2_sing_anchor_temp 2.0 \
+  --t2_sing_anchor_margin_weight 0.2 \
+  --t2_sing_anchor_correct_only \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 1 \
+  --crop_consistency_weight 0.0 \
+  --t2_target_floor 0.95 \
+  --t2_floor_penalty 2.0 \
+  --seed 1234 \
+  --batch_size 32 \
+  --lr 0.00000015 \
+  --num_epochs 3 \
+  --interval 3 \
+  --save_best_by all95_f1 \
+  --out_fold ./ckpt_t2/ufm_music_specialist
+```
+
+---
+
+# 9. 可选：训练 Music UFM specialist v2
+
+这版使用轻量 multi-crop，训练更慢，但对 Music 长音频可能更友好。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --init_from ./ckpt_t2/ufm_music_specialist/atadd_model.pt \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.05 \
+  --t2_return_type \
+  --t2_gdro \
+  --t2_gdro_active_types 3 \
+  --t2_gdro_eta 0.80 \
+  --ufm_type_loss 0.001 \
+  --ufm_router_entropy 0.0 \
+  --t2_teacher_model ft-w2v2aasist \
+  --t2_sing_teacher_ckpt $TEACHER_CKPT \
+  --t2_teacher_anchor_types 2 \
+  --t2_sing_anchor_weight 1.2 \
+  --t2_sing_anchor_temp 2.0 \
+  --t2_sing_anchor_margin_weight 0.2 \
+  --t2_sing_anchor_correct_only \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 2 \
+  --crop_consistency_weight 0.01 \
+  --t2_target_floor 0.95 \
+  --t2_floor_penalty 2.0 \
+  --seed 2026 \
+  --batch_size 16 \
+  --lr 0.0000001 \
+  --num_epochs 2 \
+  --interval 2 \
+  --save_best_by all95_f1 \
+  --out_fold ./ckpt_t2/ufm_music_specialist_v2
+```
+
+如果时间紧，可以跳过这一版。
+
+---
+
+# 10. 训练 Speech specialist
+
+当前 Progress 最大短板是 Speech，所以现在必须引入异构 Speech specialist。
+用 type-filtered speech 数据训练 FT-XLSR。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ft-w2v2aasist \
+  --xlsr $XLSR \
+  --atadd_t2_train_audio $DATA/train \
+  --atadd_t2_train_label $DATA/label_by_type/train_speech.csv \
+  --atadd_t2_dev_audio $DATA/dev \
+  --atadd_t2_dev_label $DATA/label_by_type/dev_speech.csv \
+  --seed 2027 \
+  --batch_size 8 \
+  --lr 0.000003 \
+  --num_epochs 5 \
+  --interval 5 \
+  --save_best_by f1 \
+  --out_fold ./ckpt_t2/speech_ftxlsr_specialist
+```
+
+如果显存不足：
+
+```bash
+--batch_size 4
+```
+
+---
+
+# 11. 训练 Sound specialist
+
+用 type-filtered sound 数据训练 UFM sound-only specialist。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ufm-track2-full \
+  --init_from ./ckpt_t2/ufm_vocal_anchor_soundmusic/atadd_model.pt \
+  --xlsr $XLSR \
+  --mert $MERT \
+  --beats $BEATS \
+  --atadd_t2_train_audio $DATA/train \
+  --atadd_t2_train_label $DATA/label_by_type/train_sound.csv \
+  --atadd_t2_dev_audio $DATA/dev \
+  --atadd_t2_dev_label $DATA/label_by_type/dev_sound.csv \
+  --ufm_freeze_xlsr \
+  --ufm_freeze_mert \
+  --ufm_freeze_beats \
+  --ufm_dim 512 \
+  --ufm_mem_slots 16 \
+  --ufm_heads 8 \
+  --ufm_layers 1 \
+  --ufm_dropout 0.0 \
+  --train_crop_mode random \
+  --dev_crop_mode head \
+  --train_num_crops 1 \
+  --crop_consistency_weight 0.0 \
+  --seed 2028 \
+  --batch_size 32 \
+  --lr 0.0000002 \
+  --num_epochs 4 \
+  --interval 4 \
+  --save_best_by f1 \
+  --out_fold ./ckpt_t2/sound_ufm_specialist
+```
+
+---
+
+# 12. 训练 Music MERT specialist
+
+这是最终阶段建议补上的异构 Music specialist。
+它和 UFM music specialist 不同，使用 MERT-only。
+
+```bash
+python main_train.py \
+  --gpu 0 \
+  --train_task atadd-track2 \
+  --model ft-mertaasist \
+  --mert $MERT \
+  --atadd_t2_train_audio $DATA/train \
+  --atadd_t2_train_label $DATA/label_by_type/train_music.csv \
+  --atadd_t2_dev_audio $DATA/dev \
+  --atadd_t2_dev_label $DATA/label_by_type/dev_music.csv \
+  --seed 2029 \
+  --batch_size 6 \
+  --lr 0.000003 \
+  --num_epochs 6 \
+  --interval 6 \
+  --save_best_by f1 \
+  --out_fold ./ckpt_t2/music_mert_specialist
+```
+
+如果显存不足：
+
+```bash
+--batch_size 4
+```
+
+---
+
+# 13. 生成 baseline Dev / Progress score
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ft_xlsr_baseline \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ft_xlsr_baseline/result/dev_baseline_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ft_xlsr_baseline \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ft_xlsr_baseline/result/progress_baseline_plus.csv
+```
+
+---
+
+# 14. 生成 UFM Sound/Music branch score
+
+## UFM vocal_anchor_soundmusic
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_vocal_anchor_soundmusic \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/dev_ufm_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_vocal_anchor_soundmusic \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/progress_ufm_plus.csv
+```
+
+## UFM music specialist
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_music_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_music_specialist/result/dev_music_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_music_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_music_specialist/result/progress_music_plus.csv
+```
+
+## UFM music specialist v2，可选
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_music_specialist_v2 \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_music_specialist_v2/result/dev_music_v2_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/ufm_music_specialist_v2 \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/ufm_music_specialist_v2/result/progress_music_v2_plus.csv
+```
+
+---
+
+# 15. 生成 type-specific specialists score
+
+## Speech specialist
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/speech_ftxlsr_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/speech_ftxlsr_specialist/result/dev_speech_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/speech_ftxlsr_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/speech_ftxlsr_specialist/result/progress_speech_plus.csv
+```
+
+## Sound specialist
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/sound_ufm_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/sound_ufm_specialist/result/dev_sound_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/sound_ufm_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/sound_ufm_specialist/result/progress_sound_plus.csv
+```
+
+## Music MERT specialist
+
+Dev：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/music_mert_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/dev \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/music_mert_specialist/result/dev_music_mert_plus.csv
+```
+
+Progress：
+
+```bash
+python generate_score_multicrop_plus.py \
+  --gpu 0 \
+  --model_path ./ckpt_t2/music_mert_specialist \
+  --eval_task atadd-track2 \
+  --eval_audio $DATA/eval_progress \
+  --num_crops 5 \
+  --batch_files 8 \
+  --num_workers 8 \
+  --agg mean_logit \
+  --score_file ./ckpt_t2/music_mert_specialist/result/progress_music_mert_plus.csv
+```
+
+---
+
+# 16. 两分支 / 三分支 fusion 历史方案
+
+这是你之前从 88.20 到 90.17 的关键路径。
+
+## 16.1 二分支 fusion
+
+```bash
+python tune_branch_fusion.py \
+  --ufm_csv ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/dev_ufm_plus.csv \
+  --baseline_csv ./ckpt_t2/ft_xlsr_baseline/result/dev_baseline_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/dev_type_probs.csv \
+  --label_csv $DATA/label/dev.csv \
+  --out_json ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/branch_fusion_typeclf.json \
+  --trials 12000 \
+  --seed 1234
+```
+
+应用：
+
+```bash
+python apply_branch_fusion.py \
+  --ufm_csv ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/progress_ufm_plus.csv \
+  --baseline_csv ./ckpt_t2/ft_xlsr_baseline/result/progress_baseline_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/progress_type_probs.csv \
+  --calib_json ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/branch_fusion_typeclf.json \
+  --out_csv ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/predict.csv
+```
+
+## 16.2 三分支 fusion：baseline + UFM + music-specialist
+
+```bash
+python tune_three_branch_fusion_holdout.py \
+  --baseline_csv ./ckpt_t2/ft_xlsr_baseline/result/dev_baseline_plus.csv \
+  --ufm_csv ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/dev_ufm_plus.csv \
+  --music_csv ./ckpt_t2/ufm_music_specialist/result/dev_music_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/dev_type_probs.csv \
+  --label_csv $DATA/label/dev.csv \
+  --out_json ./ckpt_t2/ufm_music_specialist/result/three_branch_fusion_holdout.json \
+  --trials 6000 \
+  --holdout_frac 0.35 \
+  --mode music_boost \
+  --seed 1234
+```
+
+应用：
+
+```bash
+python apply_three_branch_fusion.py \
+  --baseline_csv ./ckpt_t2/ft_xlsr_baseline/result/progress_baseline_plus.csv \
+  --ufm_csv ./ckpt_t2/ufm_vocal_anchor_soundmusic/result/progress_ufm_plus.csv \
+  --music_csv ./ckpt_t2/ufm_music_specialist/result/progress_music_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/progress_type_probs.csv \
+  --calib_json ./ckpt_t2/ufm_music_specialist/result/three_branch_fusion_holdout.json \
+  --out_csv ./ckpt_t2/ufm_music_specialist/result/predict.csv \
+  --debug_csv ./ckpt_t2/ufm_music_specialist/result/progress_three_branch_debug.csv
+```
+
+打包：
+
+```bash
+cd ./ckpt_t2/ufm_music_specialist/result
+zip submit_three_branch_music.zip predict.csv
+```
+
+这是你得到大约 **90.17** 的路径。
+
+---
+
+# 17. 最新推荐：多分支 fusion
+
+这是当前下一步最重要的方案：
+
+```text
+baseline
+speech specialist
+sound specialist
+music specialist
+type classifier
+```
+
+## 17.1 如果使用 Music MERT specialist
+
+```bash
+python tune_multi_branch_fusion_holdout.py \
+  --branch baseline:./ckpt_t2/ft_xlsr_baseline/result/dev_baseline_plus.csv \
+  --branch speech:./ckpt_t2/speech_ftxlsr_specialist/result/dev_speech_plus.csv \
+  --branch sound:./ckpt_t2/sound_ufm_specialist/result/dev_sound_plus.csv \
+  --branch music:./ckpt_t2/music_mert_specialist/result/dev_music_mert_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/dev_type_probs.csv \
+  --label_csv $DATA/label/dev.csv \
+  --out_json ./ckpt_t2/multibranch_fusion_typespecialists.json \
+  --trials 8000 \
+  --holdout_frac 0.35 \
+  --mode speech_music_boost \
+  --seed 1234
+```
+
+应用到 Progress：
+
+```bash
+python apply_multi_branch_fusion.py \
+  --branch baseline:./ckpt_t2/ft_xlsr_baseline/result/progress_baseline_plus.csv \
+  --branch speech:./ckpt_t2/speech_ftxlsr_specialist/result/progress_speech_plus.csv \
+  --branch sound:./ckpt_t2/sound_ufm_specialist/result/progress_sound_plus.csv \
+  --branch music:./ckpt_t2/music_mert_specialist/result/progress_music_mert_plus.csv \
+  --type_csv ./ckpt_t2/type_classifier_xmb/progress_type_probs.csv \
+  --calib_json ./ckpt_t2/multibranch_fusion_typespecialists.json \
+  --out_csv ./ckpt_t2/predict_multibranch_typespecialists.csv \
+  --debug_csv ./ckpt_t2/debug_multibranch_typespecialists.csv
+```
+
+打包提交：
+
+```bash
+cd ./ckpt_t2
+cp predict_multibranch_typespecialists.csv predict.csv
+zip submit_multibranch_typespecialists.zip predict.csv
+```
+
+## 17.2 如果使用 Music UFM specialist v2
+
+把上面 `music` 分支替换为：
+
+```bash
+--branch music:./ckpt_t2/ufm_music_specialist_v2/result/dev_music_v2_plus.csv
+```
+
+Progress 应用时替换为：
+
+```bash
+--branch music:./ckpt_t2/ufm_music_specialist_v2/result/progress_music_v2_plus.csv
+```
+
+---
+
+# 18. 提交前检查
+
+每次生成 `predict.csv` 后都检查：
+
+```bash
+wc -l predict.csv
+ls $DATA/eval_progress | wc -l
+head predict.csv
+tail predict.csv
+```
+
+要求：
+
+```text
+predict.csv 行数 = eval_progress 音频数量 + 1
+第一行为：name,predict
+预测值只能是 real / fake
+```
+
+打包：
+
+```bash
+zip submit.zip predict.csv
+```
+
+提交 `submit.zip`。
+
+---
+
+# 19. 推荐复现实验顺序
+
+如果你从零开始完整复现，按这个顺序：
+
+```text
+1. 安装最终代码；
+2. 整理 ft_xlsr_baseline；
+3. 生成 label_by_type；
+4. 训练独立 type classifier；
+5. 训练 ufm_all95_stage1_teacher_weak3；
+6. 训练 ufm_all95_stage2_teacher_weak3；
+7. 训练 ufm_vocal_anchor_soundmusic；
+8. 训练 ufm_music_specialist；
+9. 训练 speech_ftxlsr_specialist；
+10. 训练 sound_ufm_specialist；
+11. 训练 music_mert_specialist；
+12. 生成所有 Dev / Progress score；
+13. 跑 multi-branch fusion；
+14. 生成 predict.csv；
+15. 提交。
+```
+
+如果你想节省时间，优先级是：
+
+```text
+必须：
+1. type classifier
+2. baseline score
+3. ufm_vocal_anchor_soundmusic score
+4. ufm_music_specialist score
+5. three-branch fusion
+
+进一步提升：
+6. speech specialist
+7. sound specialist
+8. music_mert_specialist
+9. multi-branch fusion
+```
+
+---
+
+# 20. 哪些旧路线不建议再作为主线
+
+这些我们试过，但不建议继续作为最终主线：
+
+```text
+1. 单 UFM 直接提交；
+2. UFM raw type posterior 动态阈值；
+3. --ufm_layers 1 原始 MultiheadAttention cross block；
+4. 只用 safe_f1 强行保护 Singing；
+5. teacher anchor Speech + Singing，其中 teacher 的 Speech 只有 79；
+6. 只靠继续增加 Stage1/Stage2 epoch。
+```
+
+最终主线是：
+
+```text
+稳定 UFM + 独立 type classifier + type-specific specialists + multi-branch fusion
 ```
