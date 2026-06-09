@@ -1,6 +1,4 @@
-下面给你整理一版**完整 Track2 改进流程**。这不是把所有失败实验都重复一遍，而是把我们多轮讨论后沉淀下来的**最终可复现主线**写清楚：从代码准备、baseline/teacher、UFM、type classifier、specialist、fusion 到提交。
-
-你可以按这个流程重新在本地完整跑一遍。已经有的 checkpoint 可以跳过对应训练步骤。
+**完整 Track2 改进流程**：从代码准备、baseline/teacher、UFM、type classifier、specialist、fusion 到提交。
 
 ---
 
@@ -32,70 +30,6 @@ BEATS=/root/autodl-tmp/AT-ADD-Baseline-track2-R2/huggingface/OpenBEATs-ICME
 TEACHER_CKPT=/root/autodl-tmp/AT-ADD-Baseline-track2/ckpt_t2/gdro_adv_xlsr_aasist/checkpoint/atadd_model_10.pt
 TEACHER_DIR=/root/autodl-tmp/AT-ADD-Baseline-track2/ckpt_t2/gdro_adv_xlsr_aasist
 ```
-
----
-
-# 1. 安装我们最终版代码修改
-
-你需要把这些脚本放到项目根目录。此前我已经为你生成过：
-
-* `install_nextstep_branch_fusion.py`
-* `make_track2_type_labels.py`
-* `generate_score_multicrop_plus.py`
-* `train_type_classifier_track2.py`
-* `score_type_classifier_track2.py`
-* `tune_multi_branch_fusion_holdout.py`
-* `apply_multi_branch_fusion.py`
-* `tune_three_branch_fusion_holdout.py`
-* `apply_three_branch_fusion.py`
-* `apply_fixed_threshold.py`
-* `diagnose_type_thresholds.py`
-
-核心安装脚本：
-
-[install_nextstep_branch_fusion.py](sandbox:/mnt/data/install_nextstep_branch_fusion.py)
-
-最终 type-filter label 脚本：
-
-[make_track2_type_labels.py](sandbox:/mnt/data/make_track2_type_labels.py)
-
-最终 multi-branch fusion 脚本：
-
-[tune_multi_branch_fusion_holdout.py](sandbox:/mnt/data/tune_multi_branch_fusion_holdout.py)
-
-[apply_multi_branch_fusion.py](sandbox:/mnt/data/apply_multi_branch_fusion.py)
-
-如果你本地还没有这些文件，下载后上传到项目根目录，然后运行：
-
-```bash
-python install_nextstep_branch_fusion.py
-```
-
-检查代码语法：
-
-```bash
-python -m py_compile \
-  main_train.py \
-  model.py \
-  generate_score_multicrop_plus.py \
-  train_type_classifier_track2.py \
-  score_type_classifier_track2.py \
-  tune_branch_fusion.py \
-  apply_branch_fusion.py \
-  tune_three_branch_fusion_holdout.py \
-  apply_three_branch_fusion.py \
-  tune_multi_branch_fusion_holdout.py \
-  apply_multi_branch_fusion.py \
-  make_track2_type_labels.py
-```
-
-检查 `main_train.py` 是否已经有最终参数：
-
-```bash
-python main_train.py --help | grep -E "all95_f1|soundmusic_f1|vocal_protect_f1|t2_teacher_anchor_types|t2_gdro_active_types|train_crop_mode"
-```
-
-正常应该能看到这些参数。
 
 ---
 
@@ -486,7 +420,7 @@ python main_train.py \
   --out_fold ./ckpt_t2/ufm_music_specialist_v2
 ```
 
-如果时间紧，可以跳过这一版。
+如果时间紧，可以跳过这一版最好是训练一下试试。
 
 ---
 
@@ -892,13 +826,13 @@ cd ./ckpt_t2/ufm_music_specialist/result
 zip submit_three_branch_music.zip predict.csv
 ```
 
-这是你得到大约 **90.17** 的路径。
+我自己训练完大约 **90.17** 的F1。
 
 ---
 
-# 17. 最新推荐：多分支 fusion
+# 17. 推荐：多分支 fusion
 
-这是当前下一步最重要的方案：
+以下建议将17.1和17.2的两个方案都尝试一下：
 
 ```text
 baseline
@@ -963,34 +897,6 @@ Progress 应用时替换为：
 
 ---
 
-# 18. 提交前检查
-
-每次生成 `predict.csv` 后都检查：
-
-```bash
-wc -l predict.csv
-ls $DATA/eval_progress | wc -l
-head predict.csv
-tail predict.csv
-```
-
-要求：
-
-```text
-predict.csv 行数 = eval_progress 音频数量 + 1
-第一行为：name,predict
-预测值只能是 real / fake
-```
-
-打包：
-
-```bash
-zip submit.zip predict.csv
-```
-
-提交 `submit.zip`。
-
----
 
 # 19. 推荐复现实验顺序
 
@@ -1014,39 +920,9 @@ zip submit.zip predict.csv
 15. 提交。
 ```
 
-如果你想节省时间，优先级是：
-
-```text
-必须：
-1. type classifier
-2. baseline score
-3. ufm_vocal_anchor_soundmusic score
-4. ufm_music_specialist score
-5. three-branch fusion
-
-进一步提升：
-6. speech specialist
-7. sound specialist
-8. music_mert_specialist
-9. multi-branch fusion
-```
-
 ---
 
-# 20. 哪些旧路线不建议再作为主线
-
-这些我们试过，但不建议继续作为最终主线：
-
-```text
-1. 单 UFM 直接提交；
-2. UFM raw type posterior 动态阈值；
-3. --ufm_layers 1 原始 MultiheadAttention cross block；
-4. 只用 safe_f1 强行保护 Singing；
-5. teacher anchor Speech + Singing，其中 teacher 的 Speech 只有 79；
-6. 只靠继续增加 Stage1/Stage2 epoch。
-```
-
-最终主线是：
+# 20. 最终主线是：
 
 ```text
 稳定 UFM + 独立 type classifier + type-specific specialists + multi-branch fusion
